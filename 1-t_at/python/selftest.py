@@ -225,6 +225,11 @@ RULE_CASES = [
     ("half a kilo of potatoes", "potatoes", None, 500),
     ("3 packs of instant noodles", "noodles", 3, None),
     ("cup noodles", "noodles", None, None),
+    ("2 cups of noodles", "noodles", 2, None),          # the cup is a measure here, not tea
+    ("a cup of ramen", "noodles", 1, None),
+    ("2 cups", "tea", 2, None),                         # nothing else: cups mean tea
+    ("eine Tasse", "tea", 1, None),
+    ("eine Tasse Nudelsuppe", "noodles", 1, None),
     ("2 ramen", "noodles", 2, None),
     ("instant noodles x2", "noodles", 2, None),
     ("a pizza", None, None, None),
@@ -299,16 +304,19 @@ class FakeLLM(object):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 outer.requests.append((self.path, body))
                 reply = outer.answer(body["messages"][-1]["content"], body)
-                if isinstance(reply, int):
-                    self.send_response(reply)
+                try:
+                    if isinstance(reply, int):
+                        self.send_response(reply)
+                        self.end_headers()
+                        return
+                    data = json.dumps({"choices": [{"message": {"role": "assistant", "content": reply}}]})
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
-                    return
-                data = json.dumps({"choices": [{"message": {"role": "assistant", "content": reply}}]})
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data.encode("utf-8"))
+                    self.wfile.write(data.encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass            # the client stopped waiting: that is what some tests are about
 
             def log_message(self, *args):
                 pass
@@ -402,6 +410,21 @@ def llm_fallbacks():
         assert engine.status()["status"] == "ready"
         got = engine.parse("two teas")
         assert (got["recipe"], got["portions"], got["source"]) == ("tea", 2, "llm"), got
+        body = fake.requests[-1][1]
+        assert "response_format" not in body
+        assert body["chat_template_kwargs"] == {"enable_thinking": False}, "thinking must stay off"
+    finally:
+        fake.close()
+
+    # 1b. a server that rejects both extra fields gets a plain request
+    def pickier(text, body):
+        return 400 if ("response_format" in body or "chat_template_kwargs" in body) else order("tea", 2)
+    fake = FakeLLM(pickier)
+    try:
+        engine = fake.engine()
+        assert engine.status()["status"] == "ready"
+        assert engine.parse("two teas")["source"] == "llm"
+        assert sorted(fake.requests[-1][1]) == ["max_tokens", "messages", "model", "stream", "temperature"]
     finally:
         fake.close()
 
@@ -444,18 +467,170 @@ def llm_fallbacks():
     assert engine._brick.calls == ["clear", "something with spuds for three"]
 
     # 4. nothing reachable at all: status goes to failed, the rules keep working
-    engine = intent.IntentEngine(recipes.RecipeBook.load(), url="http://127.0.0.1:9/v1", enabled=True)
+    engine = intent.IntentEngine(recipes.RecipeBook.load(), url="http://127.0.0.1:9/v1", enabled=True,
+                                 retry_s=3600)   # no second try during this test
     engine._status = "ready"
-    engine._recoveries = 99                     # do not start a background recovery in this test
     for _ in range(2):
         assert engine.parse("pasta for 4")["source"] == "rules"
-    assert engine.status()["status"] == "failed"
+    status = engine.status()
+    assert status["status"] == "failed" and "trying again in 60 min" in status["note"], status
+    engine.set_enabled(False)
+    assert engine.status()["status"] == "off"
 
     # 5. no LLM configured (the brick was removed from app.yaml): off, and it stays off
     engine = intent.IntentEngine(recipes.RecipeBook.load(), url=None, enabled=True)
     engine.start()
     engine.set_enabled(True)
     assert engine.status()["status"] == "off" and not engine.will_use_llm()
+
+
+@test
+def llm_one_time_budget_per_request():
+    """Structured request, plain retry and the brick together never exceed the one time limit."""
+    class HangingBrick(object):
+        def clear_memory(self):
+            pass
+
+        def chat(self, text):
+            time.sleep(30)
+            return ""
+
+    limit = 0.5
+    state = {"bad": False}
+
+    def answer(text, body):
+        if state["bad"]:
+            time.sleep(0.8 * limit)                         # every step fails slowly ...
+            return 400 if "response_format" in body else 500
+        return order("tea", 2)
+    fake = FakeLLM(answer)
+    try:
+        engine = fake.engine(timeout_s=limit, retry_s=3600)
+        assert engine.status()["status"] == "ready"
+        engine._brick = HangingBrick()                      # ... and then the brick hangs
+        state["bad"] = True
+        started = time.time()
+        got = engine.parse("2 cups of tea")
+        took = time.time() - started
+        assert got["source"] == "rules" and got["portions"] == 2, got
+        assert took < limit * 1.5, "parse waited {:.2f} s with a {:.1f} s limit".format(took, limit)
+    finally:
+        fake.close()
+
+
+@test
+def llm_failed_is_not_a_dead_end():
+    def wait_for(engine, wanted, seconds):
+        end = time.time() + seconds
+        while time.time() < end:
+            if engine.status()["status"] == wanted:
+                return True
+            time.sleep(0.01)
+        return False
+
+    # one slow warm-up sample (the board is still busy booting) is forgiven
+    state = {"warm": 0, "slow": False, "junk": False}
+
+    def answer(text, body):
+        if text == "pasta for 4":
+            state["warm"] += 1
+            if state["warm"] == 1:
+                time.sleep(0.6)
+        if state["slow"]:
+            time.sleep(0.6)
+        return "I am thinking about tea" if state["junk"] else order("tea", 2)
+    fake = FakeLLM(answer)
+    try:
+        engine = fake.engine(timeout_s=0.3, retry_s=0.3)
+        assert engine.status()["status"] == "ready", engine.status()
+
+        # the model gets slow: two late answers in a row, then it is left alone ...
+        state["slow"] = True
+        assert engine.parse("2 cups of tea")["source"] == "rules"
+        assert engine.parse("2 cups of tea")["source"] == "rules"
+        status = engine.status()
+        assert status["status"] == "failed" and "trying again" in status["note"], status
+        started = time.time()
+        assert engine.parse("2 cups of tea")["source"] == "rules"
+        assert time.time() - started < 0.25, "a failed model must not be waited for"
+        # ... and tried again later, by itself, as often as it takes
+        state["slow"] = False
+        assert wait_for(engine, "ready", 8.0), engine.status()
+        assert engine.parse("tea for two")["source"] == "llm"
+        for _ in range(4):                                  # more hiccups than any fixed budget
+            state["slow"] = True
+            engine.parse("2 cups of tea")
+            engine.parse("2 cups of tea")
+            assert engine.status()["status"] == "failed"
+            state["slow"] = False
+            time.sleep(0.7)
+            assert wait_for(engine, "ready", 8.0), engine.status()
+
+        # a model whose answers are never usable costs the user two waits, not every one
+        state["junk"] = True
+        assert engine.parse("2 cups of tea")["source"] == "rules"
+        assert engine.parse("2 cups of tea")["source"] == "rules"
+        assert engine.status()["status"] == "failed", engine.status()
+        time.sleep(1.2)                                     # the retries find junk again: still failed
+        status = engine.status()
+        assert status["status"] in ("failed", "loading"), status
+        state["junk"] = False
+        assert wait_for(engine, "ready", 10.0), engine.status()
+        engine.set_enabled(False)                           # switching it off stops the retries
+        time.sleep(0.5)
+        assert engine.status()["status"] == "off"
+    finally:
+        fake.close()
+
+    # a model that answers at once but never with an order is not "ready" in the first place
+    fake = FakeLLM(lambda text, body: "")
+    try:
+        engine = fake.engine(retry_s=3600)
+        status = engine.status()
+        assert status["status"] == "failed" and "not usable" in status["note"], status
+        before = len(fake.requests)
+        assert engine.parse("2 cups of tea")["source"] == "rules"
+        assert len(fake.requests) == before
+    finally:
+        fake.close()
+
+
+@test
+def llm_cannot_override_what_the_text_says():
+    wrong = {
+        "cup noodles": order("tea", 1),
+        "2 cup noodles": order("tea", 2),
+        "Instantnudeln": order("pasta"),
+        "Instantnudeln für 2": order("pasta", 2),
+        "instant Nudeln für 2": order("pasta", 2),
+        "Mie-Nudeln": order("pasta"),
+        "2 cups of noodles": order("tea", 2),
+        "Nudeln für 3": order("noodles", 3),
+        # odd numbers from the model must not turn an understood text into "sorry"
+        "2 cups of tea": '{"recipe":"tea","portions":2,"grams":1e999}',
+        "pasta for 4": '{"recipe":"pasta","portions":Infinity,"grams":null}',
+        "Kartoffeln für 3": '{"recipe":"potatoes","portions":' + "9" * 400 + ',"grams":null}',
+        # two recipes in different places: here the model may choose
+        "tea and then pasta": order("tea", 1),
+    }
+    expected = {
+        "cup noodles": ("noodles", None), "2 cup noodles": ("noodles", 2), "Instantnudeln": ("noodles", None),
+        "Instantnudeln für 2": ("noodles", 2), "instant Nudeln für 2": ("noodles", 2),
+        "Mie-Nudeln": ("noodles", None), "2 cups of noodles": ("noodles", 2), "Nudeln für 3": ("pasta", 3),
+        "2 cups of tea": ("tea", 2), "pasta for 4": ("pasta", 4), "Kartoffeln für 3": ("potatoes", 3),
+        "tea and then pasta": ("tea", 1),
+    }
+    fake = FakeLLM(lambda text, body: wrong.get(text, order("unknown")))
+    try:
+        engine = fake.engine()
+        assert engine.status()["status"] == "ready", engine.status()
+        for text, (recipe, portions) in expected.items():
+            got = engine.parse(text)
+            assert (got["recipe"], got["portions"]) == (recipe, portions), (text, got)
+        assert engine.extract_order('{"recipe":"tea","portions":1e999,"grams":-1e999}') == \
+            {"recipe": "tea", "portions": None, "grams": None}
+    finally:
+        fake.close()
 
 
 @test

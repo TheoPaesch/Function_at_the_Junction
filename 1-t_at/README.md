@@ -110,7 +110,7 @@ The factor (counts per gram) is stored in `/app/data/settings.json` and sent bac
 ## Troubleshooting
 
 - **The LLM runs out of memory**: lower `LLAMA_ARG_CTX_SIZE` in `app.yaml`, or switch the LLM off in Settings, or remove the `arduino:llm` brick from `app.yaml`. The app then uses the rules only; nothing else changes.
-- **The LLM is slow or shows "failed"**: free text still works, through the rules. A request never waits longer than 15 s for the model. Settings shows its status and last answer time.
+- **The LLM is slow or shows "failed"**: free text still works, through the rules. A request never waits longer than 15 s for the model, and a failed model is tried again by itself. Settings shows its status, the reason and the last answer time.
 - **"Board offline"**: the sketch is not running or the Bridge is not up yet. Check App Lab's console and press Run again. The web app keeps working and reconnects by itself.
 - **No Knob or Buzzer**: they are detected once at boot. Check the Qwiic cables and restart the app. Settings shows what was found.
 - **The phone cannot open the page**: try the IP address instead of the `.local` name, and use a hotspot if the Wi-Fi isolates devices.
@@ -166,8 +166,8 @@ The sketch was last compiled this way with core 1.1.0: about 149 kB of flash (18
 
 ## Assumptions
 
-- **Parser**: the rules always run and numbers written in the text ("for 4", "300 g") come from them. One clear recipe keyword decides the recipe; the model decides when the rules find nothing or several candidates. German "Nudeln" alone means pasta; English "noodles" alone means instant noodles.
-- **LLM readiness**: the model counts as ready only after a warm request answered within 15 s. After two failed requests in a row it is marked failed and warmed up again in the background.
+- **Parser**: the rules always run and numbers written in the text ("for 4", "300 g") come from them. When the keywords in the text point to one recipe, that decides; the model decides when the rules find nothing, or keywords of two recipes in different places ("tea and pasta"). "cup", "mug" and "Tasse" are also measures: "2 cups of noodles" is noodles, "2 cups" alone is tea. German "Nudeln" alone means pasta; English "noodles" alone means instant noodles.
+- **LLM readiness**: the model counts as ready only after it gave a usable answer (a JSON order) within 15 s. One request never waits longer than 15 s for it in total, whatever fallbacks it goes through. After two late or unusable answers in a row the model is marked failed and tried again by itself, after 1 minute at first and then with pauses that double up to 15 minutes.
 - **Vessel step**: the reference is the lowest weight seen since the step began, so taking an old kettle off and putting an empty one on is detected too.
 - **Safety beyond the brief**: Python does not start the water when the vessel left the plate after the tare, and the board refuses `dispense` in that case as well. While water runs, a Knob press stops it on the board itself.
 - **Who shows a stop**: when the board stops the water itself (timeout, no flow, vessel removed, link lost, tilt, Knob press) it shows the X, goes red and beeps on its own, because Python may be gone. After Python's `stop()` it only closes the valve and reports `error_stopped`; Python then sets the screen and the beep, so a cancel shows the idle drop and never an error.

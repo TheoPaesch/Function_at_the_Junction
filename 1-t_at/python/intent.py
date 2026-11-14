@@ -6,8 +6,12 @@ optional accelerator, never a dependency:
 
 * The rules always run. Numbers written in the text ("for 4", "2 cups",
   "300 g") come from the rules, because digits are not a matter of opinion.
-* When the text holds exactly one recipe keyword, that keyword decides.
-  The model decides when the rules find nothing or more than one candidate.
+* When the keywords in the text point to one recipe, that decides. The model
+  decides when the rules find nothing, or keywords of two different recipes
+  in different places ("tea and pasta").
+* One request never waits longer than 15 s for the model, whatever fallbacks
+  it goes through. A model that fails, is too slow or gives unusable answers
+  is marked "failed" and tried again later, with growing pauses.
 
 Synonyms live in recipes.json. Two bits of syntax keep German compounds and
 word pairs short there:
@@ -35,8 +39,19 @@ LLM_MODEL = "Qwen3.5-0.8B-Q4_0"
 LLM_LABEL = "Qwen 0.8B"
 LLM_TIMEOUT_S = 15.0        # a user never waits longer than this for the model
 WARMUP_TIMEOUT_S = 120.0    # the first request also loads the model
+WARM_SAMPLES = 2            # tries to get one usable answer within LLM_TIMEOUT_S
+RETRY_FIRST_S = 60.0        # after "failed": try again after this long ...
+RETRY_MAX_S = 900.0         # ... doubling up to this
 MAX_TEXT = 200
 MAX_PORTIONS = 12
+
+# What we ask the server for, from most to least: a server that rejects a
+# field it does not know (HTTP 4xx) gets the next variant.
+_VARIANTS = (
+    ("response_format", "chat_template_kwargs"),    # JSON schema, thinking off
+    ("chat_template_kwargs",),                      # thinking off
+    (),                                             # plain chat completion
+)
 
 # ---- text folding ----------------------------------------------------------
 
@@ -91,7 +106,7 @@ _ZU = {"zweit": 2, "dritt": 3, "viert": 4, "funft": 5, "fuenft": 5, "sechst": 6,
 
 _NUM = r"(?:\d{1,4}(?:\.\d+)?|" + "|".join(sorted(_NUMBERS, key=lambda w: (-len(w), w))) + ")"
 
-_UNITS = _alt([
+_UNIT_LIST = [
     # people
     "people", "persons", "person", "personen", "leute", "portions", "portion", "portionen",
     "servings", "serving", "guests", "guest", "gäste", "gast", "adults", "adult", "kids", "kid",
@@ -102,7 +117,11 @@ _UNITS = _alt([
     # packs
     "packs", "pack", "packets", "packet", "packages", "package", "packungen", "packung",
     "päckchen", "tüten", "tüte", "bags", "bag", "blocks", "block",
-])
+]
+_UNITS = _alt(_UNIT_LIST)
+_UNIT_FORMS = set()
+for _word in _UNIT_LIST:
+    _UNIT_FORMS |= variants(_word)
 _KG = r"(?:kg|kilo|kilos|kilogram|kilograms|kilogramm|kilogramme)"
 _G = r"(?:g|gr|gram|grams|gramm|gramme|grammes)"
 
@@ -201,6 +220,9 @@ class _Keyword(object):
         raw = synonym.strip()
         self.prefix = self.suffix = None
         self.patterns = []
+        # "cup", "mug", "Tasse" are also measures: "2 cups of noodles" is not tea.
+        # Such a word names its recipe only when no other recipe word is in the text.
+        self.weak = not any(ch in raw for ch in "*+ ") and bool(variants(raw) & _UNIT_FORMS)
         if raw.startswith("*") or raw.endswith("*"):
             self.tier = _TIER_WILDCARD
             stems = variants(raw.strip("*"))
@@ -222,21 +244,21 @@ class _Keyword(object):
             self.patterns = [re.compile(r"(?<![a-z0-9])" + body + _PLURAL + r"(?![a-z0-9])")]
 
     def find(self, norm, tokens):
-        """Position of the match in the text, or None."""
+        """The (start, end) spans this keyword covers in the text, or None when it is not there."""
         if self.patterns:
-            first = None
+            spans = []
             for pattern in self.patterns:
                 match = pattern.search(norm)
                 if not match:
                     return None
-                first = match.start() if first is None else min(first, match.start())
-            return first
+                spans.append((match.start(), match.end()))
+            return spans
         position = 0
         for token in tokens:
             if self.suffix and len(token) > self.length and token.endswith(self.suffix):
-                return position
+                return [(position, position + len(token))]
             if self.prefix and len(token) > self.length and token.startswith(self.prefix):
-                return position
+                return [(position, position + len(token))]
             position += len(token) + 1
         return None
 
@@ -319,7 +341,7 @@ class IntentEngine(object):
     """Understands what the user is making."""
 
     def __init__(self, book, url=LLM_URL, model=LLM_MODEL, label=LLM_LABEL, enabled=True,
-                 use_brick=False, api_key=None, timeout_s=LLM_TIMEOUT_S):
+                 use_brick=False, api_key=None, timeout_s=LLM_TIMEOUT_S, retry_s=RETRY_FIRST_S):
         self.book = book
         self.system_prompt = build_system_prompt(book)
         self.schema = build_schema(book)
@@ -330,7 +352,7 @@ class IntentEngine(object):
         self._api_key = api_key
         self._use_brick = bool(use_brick)
         self._brick = None
-        self._structured = True             # response_format + chat_template_kwargs accepted
+        self._variant = 0                   # index into _VARIANTS: what this server accepts
         self._available = bool(self.endpoint) or self._use_brick
         self._enabled = bool(enabled) and self._available
         self._lock = threading.Lock()       # status fields
@@ -338,8 +360,9 @@ class IntentEngine(object):
         self._status = "off"
         self._note = None if self._available else "no local LLM configured"
         self._last_ms = None
-        self._fails = 0
-        self._recoveries = 0
+        self._fails = 0                     # unusable answers in a row
+        self._retry_first_s = float(retry_s)
+        self._retry_s = float(retry_s)      # pause before the next try after "failed"
         self._generation = 0
 
         self._keywords = []
@@ -386,10 +409,11 @@ class IntentEngine(object):
                 return
             self._enabled = enabled
             if not enabled:
-                self._generation += 1       # cancels a running warm-up
+                self._generation += 1       # cancels a running warm-up and any pending retry
                 self._status = "off"
+                self._note = None
                 return
-            self._recoveries = 0
+            self._retry_s = self._retry_first_s
         self.start()
 
     def _current(self, generation):
@@ -402,6 +426,29 @@ class IntentEngine(object):
                 return
             for key, value in fields.items():
                 setattr(self, "_" + key, value)
+
+    def _fail(self, generation, reason):
+        """Mark the model failed and try again later: "failed" is never a dead end.
+        The pause doubles each time, so a model that is simply too slow costs little."""
+        with self._lock:
+            if generation != self._generation or not self._enabled:
+                return
+            delay = self._retry_s
+            self._retry_s = min(self._retry_s * 2.0, RETRY_MAX_S)
+            self._status = "failed"
+            self._fails = 0
+            pause = "{:.0f} s".format(delay) if delay < 90 else "{:.0f} min".format(delay / 60.0)
+            self._note = "{}; trying again in {}".format(reason, pause)
+        log.warning("local LLM: %s; rules only for now, next try in %.0f s", reason, delay)
+        timer = threading.Timer(delay, self._retry, args=(generation,))
+        timer.daemon = True
+        timer.start()
+
+    def _retry(self, generation):
+        with self._lock:
+            if generation != self._generation or not self._enabled or self._status != "failed":
+                return
+        self.start()
 
     # ---- talking to the model ----------------------------------------------
 
@@ -424,7 +471,7 @@ class IntentEngine(object):
             log.warning("LLM brick failed to start: %s", exc)
             return None
 
-    def _http_chat(self, text, timeout, structured):
+    def _http_chat(self, text, timeout, fields):
         body = {
             "model": self.model,
             "messages": [{"role": "system", "content": self.system_prompt},
@@ -433,8 +480,9 @@ class IntentEngine(object):
             "max_tokens": 40,
             "stream": False,
         }
-        if structured:
+        if "chat_template_kwargs" in fields:
             body["chat_template_kwargs"] = {"enable_thinking": False}
+        if "response_format" in fields:
             body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "order", "schema": self.schema},
@@ -448,28 +496,39 @@ class IntentEngine(object):
             data = json.loads(response.read().decode("utf-8", "replace"))
         return data["choices"][0]["message"]["content"] or ""
 
-    def _request(self, text, timeout):
-        """One chat completion: HTTP first, the brick as a fallback. Raises when nothing answers."""
+    def _request(self, text, budget_s):
+        """One chat completion within budget_s seconds IN TOTAL, whatever it has to try:
+        HTTP first (stepping down to what the server accepts), the brick as a fallback.
+        Raises when nothing answers in time."""
+        deadline = time.monotonic() + budget_s
+        late = TimeoutError("the local LLM took longer than {:.0f} s".format(budget_s))
         error = None
         if self.endpoint:
-            try:
-                return self._http_chat(text, timeout, self._structured)
-            except urllib.error.HTTPError as exc:
-                error = exc
-                if self._structured and 400 <= exc.code < 500:
-                    # The server does not know response_format or chat_template_kwargs.
-                    try:
-                        content = self._http_chat(text, timeout, False)
-                        self._structured = False
-                        return content
-                    except Exception as exc2:
-                        error = exc2
-            except Exception as exc:
-                error = exc
+            variant = self._variant
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0.05:
+                    raise late
+                try:
+                    content = self._http_chat(text, left, _VARIANTS[variant])
+                    self._variant = variant         # remember what worked
+                    return content
+                except urllib.error.HTTPError as exc:
+                    error = exc
+                    if 400 <= exc.code < 500 and variant < len(_VARIANTS) - 1:
+                        variant += 1                # the server does not know one of our fields
+                        continue
+                    break
+                except Exception as exc:
+                    error = exc
+                    break
             if _is_timeout(error):
                 raise error             # too slow: asking again through the brick will not help
         if self._brick is not None:
-            return self._brick_chat(text, timeout)
+            left = deadline - time.monotonic()
+            if left <= 0.05:
+                raise late
+            return self._brick_chat(text, left)
         raise error or RuntimeError("no local LLM configured")
 
     def _brick_chat(self, text, timeout):
@@ -512,45 +571,58 @@ class IntentEngine(object):
         if not self._current(generation):
             return
         if problem is not None:
-            log.warning("local LLM not reachable, rules only: %s", problem)
-            self._set(generation, status="failed", note="not reachable: " + problem[:120])
+            self._fail(generation, "not reachable (" + problem[:100] + ")")
             return
-        started = time.monotonic()
-        try:
-            self._request("pasta for 4", self.timeout_s)             # warm: what a user waits for
-        except Exception as exc:
-            log.warning("local LLM is too slow or failed when warm, rules only: %s", exc)
-            self._set(generation, status="failed",
-                      note="too slow for this board (over {:.0f} s)".format(self.timeout_s))
-            return
-        took = int((time.monotonic() - started) * 1000)
-        log.info("local LLM ready, warm answer in %d ms", took)
-        self._set(generation, status="ready", last_ms=took, fails=0, note=None)
+        # Warm: this is what a user will wait for. "Ready" means a usable answer (a JSON order)
+        # within the time limit; one slow sample while the board is still busy is forgiven.
+        reason = "no usable answer"
+        for attempt in range(WARM_SAMPLES):
+            started = time.monotonic()
+            order = None
+            try:
+                order = self.extract_order(self._request("pasta for 4", self.timeout_s))
+                if order is None:
+                    reason = "its answers are not usable"
+            except Exception as exc:
+                if _is_timeout(exc):
+                    reason = "too slow for this board (over {:.0f} s)".format(self.timeout_s)
+                else:
+                    reason = "request failed ({})".format(str(exc)[:100] or exc.__class__.__name__)
+            if not self._current(generation):
+                return
+            if order is not None:
+                took = int((time.monotonic() - started) * 1000)
+                log.info("local LLM ready, warm answer in %d ms", took)
+                self._set(generation, status="ready", last_ms=took, fails=0, note=None,
+                          retry_s=self._retry_first_s)
+                return
+            if attempt + 1 < WARM_SAMPLES:
+                time.sleep(min(2.0, self.timeout_s))
+        self._fail(generation, reason)
 
     def _ask_llm(self, text):
-        """Ask the model for an order. Returns a validated dict or None."""
+        """Ask the model for an order. Returns a validated dict, or None when it gave nothing usable."""
         started = time.monotonic()
-        content = None
+        order = None
         try:
-            content = self._request(text, self.timeout_s)
+            order = self.extract_order(self._request(text, self.timeout_s))
         except Exception as exc:
             log.warning("local LLM request failed: %s", exc)
         took = int((time.monotonic() - started) * 1000)
-        recover = False
+        failed_generation = None
         with self._lock:
             self._last_ms = took
-            if content is None:
+            if order is None:
+                # No answer, a late answer and an answer without a JSON order all cost the user
+                # the wait for nothing. Two in a row: stop asking, try again later.
                 self._fails += 1
                 if self._fails >= 2 and self._status == "ready":
-                    self._status = "failed"
-                    self._note = "stopped answering"
-                    recover = self._recoveries < 3
-                    self._recoveries += 1
+                    failed_generation = self._generation
             else:
                 self._fails = 0
-        if recover:
-            self.start()
-        return self.extract_order(content) if content else None
+        if failed_generation is not None:
+            self._fail(failed_generation, "stopped giving usable answers")
+        return order
 
     def extract_order(self, content):
         """Validate and clamp what the model said. None when there is no JSON object in it."""
@@ -577,25 +649,44 @@ class IntentEngine(object):
     # ---- rules -------------------------------------------------------------
 
     def find_recipe(self, norm):
-        """Best keyword match. Returns (recipe id or None, set of all candidate ids)."""
+        """Best keyword match. Returns (recipe id or None, ids of the recipes that really compete).
+
+        A second recipe competes only when its keyword sits somewhere else in the text
+        ("tea and pasta"). A keyword inside the winner's own words does not: the "cup" in
+        "cup noodles", the "nudeln" in "Instantnudeln" or in "instant Nudeln".
+        """
         tokens = norm.split()
-        hits = []
+        hits = []                   # (tier, length, -position, recipe id, spans, weak)
         for keyword in self._keywords:
-            position = keyword.find(norm, tokens)
-            if position is not None:
-                hits.append((keyword.tier, keyword.length, -position, keyword.recipe_id))
-        if not hits:                                    # typos: 'spagetti', 'kartofeln'
+            spans = keyword.find(norm, tokens)
+            if spans:
+                first = min(start for start, _ in spans)
+                hits.append((keyword.tier, keyword.length, -first, keyword.recipe_id, spans, keyword.weak))
+        if any(not hit[5] for hit in hits):
+            hits = [hit for hit in hits if not hit[5]]      # a measure word next to a real recipe word
+        if not hits:                                        # typos: 'spagetti', 'kartofeln'
             position = 0
             for token in tokens:
                 if len(token) >= 5:
                     close = difflib.get_close_matches(token, self._fuzzy_words, n=1, cutoff=0.82)
                     if close:
-                        hits.append((_TIER_FUZZY, len(close[0]), -position, self._fuzzy[close[0]]))
+                        hits.append((_TIER_FUZZY, len(close[0]), -position, self._fuzzy[close[0]],
+                                     [(position, position + len(token))], False))
                 position += len(token) + 1
         if not hits:
             return None, set()
-        hits.sort(reverse=True)
-        return hits[0][3], set(hit[3] for hit in hits)
+        hits.sort(key=lambda hit: hit[:3], reverse=True)
+        best = hits[0]
+
+        def inside_best(spans):
+            return all(any(start >= b_start and end <= b_end for b_start, b_end in best[4])
+                       for start, end in spans)
+
+        candidates = set([best[3]])
+        for hit in hits[1:]:
+            if hit[3] != best[3] and not inside_best(hit[4]):
+                candidates.add(hit[3])
+        return best[3], candidates
 
     def read(self, text):
         """What the rules see in the text, before any recipe limits are applied."""
@@ -637,8 +728,11 @@ class IntentEngine(object):
         try:
             result = self._parse(text)
         except Exception:
-            log.exception("parse failed")
-            result = {"recipe": None, "portions": None, "grams": None, "source": "rules"}
+            log.exception("parse failed, using the rules alone")
+            try:
+                result = self.rules(text)
+            except Exception:
+                result = {"recipe": None, "portions": None, "grams": None, "source": "rules"}
         result["ms"] = int((time.monotonic() - started) * 1000)
         return result
 
@@ -648,6 +742,9 @@ class IntentEngine(object):
         if text and self.will_use_llm() and self._busy.acquire(False):
             try:
                 answer = self._ask_llm(text)
+            except Exception:                       # whatever the model side does, the rules still answer
+                log.exception("local LLM step failed")
+                answer = None
             finally:
                 self._busy.release()
 
