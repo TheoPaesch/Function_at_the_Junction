@@ -1130,13 +1130,17 @@ def history_totals_and_today():
 
 @test
 def storage_survives_a_read_only_folder():
-    shutil.rmtree(storage.FALLBACK_DIR, ignore_errors=True)
+    original = storage.FALLBACK_DIR
+    storage.FALLBACK_DIR = tempfile.mkdtemp(prefix="selftest-fallback-")    # never the shared one
     _TEMP_DIRS.append(storage.FALLBACK_DIR)
-    store = storage.Storage("/proc/definitely/not/writable/data")
-    assert store.data_dir == storage.FALLBACK_DIR
-    assert store.settings() == storage.DEFAULT_SETTINGS
-    store.add_run({"recipe": "tea", "saved_ml": 1})
-    assert store.stats()["total"]["runs"] == 1
+    try:
+        store = storage.Storage("/proc/definitely/not/writable/data")
+        assert store.data_dir == storage.FALLBACK_DIR
+        assert store.settings() == storage.DEFAULT_SETTINGS
+        store.add_run({"recipe": "tea", "saved_ml": 1})
+        assert store.stats()["total"]["runs"] == 1
+    finally:
+        storage.FALLBACK_DIR = original
 
 
 # ============================================================================
