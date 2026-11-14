@@ -173,7 +173,8 @@ float noflowRing[NOFLOW_SLOTS];
 int noflowIdx = 0;
 
 // requests set by the Bridge handlers, carried out by loop()
-bool reqStop = false;
+bool reqStop = false;         // Python called stop(): it knows why, and mirrors the screen itself
+bool reqLocalStop = false;    // the Knob was pressed while water ran
 bool reqTare = false;
 bool reqDispense = false;
 float reqDispenseMl = 0.0f;
@@ -494,6 +495,7 @@ void beginDispense(float ml, uint32_t now) {
   noflowIdx = 0;
   dispensedG = 0.0f;
   reqStop = false;
+  reqLocalStop = false;
   errorActive = false;
   greenOn = false;
   screen = SCREEN_DISPENSING;
@@ -530,15 +532,20 @@ void beepStart(int pattern, uint32_t now) {
   beepNextMs = now;
 }
 
-void safetyStop(const char *code, uint32_t now) {
+// local = the board found the problem itself: show the X, go red and beep here,
+// because Python may be gone. After Python's own stop() the board only closes
+// the valve and reports; Python then says what to show (a cancel is not an error).
+void safetyStop(const char *code, bool local, uint32_t now) {
   valveSet(false, now);
   mode = MODE_IDLE;
   float gained = netG - startG;
   dispensedG = gained > 0.0f ? gained : 0.0f;
-  errorActive = true;
   greenOn = false;
-  screen = SCREEN_ERROR;
-  beepStart(4, now);
+  if (local) {
+    errorActive = true;
+    screen = SCREEN_ERROR;
+    beepStart(4, now);
+  }
   String kind("error_");
   kind += code;
   Bridge.notify("mcu_event", kind, dispensedG);
@@ -567,17 +574,19 @@ void dispenseUpdate(uint32_t now) {
     uint32_t openFor = now - dispenseStartMs;
     float gainedInWindow = netG - noflowRing[noflowIdx];     // the oldest slot: 4 s ago
     if (reqStop) {
-      safetyStop("stopped", now);
+      safetyStop("stopped", false, now);
+    } else if (reqLocalStop) {
+      safetyStop("stopped", true, now);
     } else if (openFor > dispenseTimeoutMs) {
-      safetyStop("timeout", now);
+      safetyStop("timeout", true, now);
     } else if (now - lastPingMs > PING_TIMEOUT_MS) {
-      safetyStop("link_lost", now);
+      safetyStop("link_lost", true, now);
     } else if (netG < startG - VESSEL_DROP_G) {
-      safetyStop("vessel_removed", now);
+      safetyStop("vessel_removed", true, now);
     } else if (openFor >= NOFLOW_GRACE_MS && gainedInWindow < NOFLOW_MIN_G) {
-      safetyStop("no_flow", now);
+      safetyStop("no_flow", true, now);
     } else if (tiltTripped(now)) {
-      safetyStop("tilt", now);
+      safetyStop("tilt", true, now);
     } else {
       // Between two samples, assume the water kept coming at the measured rate.
       float estimate = netG;
@@ -597,14 +606,15 @@ void dispenseUpdate(uint32_t now) {
     }
   } else if (mode == MODE_SETTLING) {
     if (reqStop) {
-      safetyStop("stopped", now);
+      safetyStop("stopped", false, now);
     } else if (netG < startG - VESSEL_DROP_G) {
-      safetyStop("vessel_removed", now);
+      safetyStop("vessel_removed", true, now);
     } else if (now - settleStartMs >= SETTLE_MS) {
       finishDispense(now);
     }
   }
   reqStop = false;
+  reqLocalStop = false;
 }
 
 // ============================================================================
@@ -943,7 +953,7 @@ void knobUpdate(uint32_t now) {
     if (knobDown) {
       sendEvent("knob_press", 1.0f);
       if (mode == MODE_DISPENSING) {
-        reqStop = true;            // while water runs the Knob is a stop button
+        reqLocalStop = true;       // while water runs the Knob is a stop button
       }
     }
   }

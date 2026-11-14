@@ -670,6 +670,10 @@ def select_only_when_free_and_cancel_everywhere():
     assert snap["flow"]["state"] == "idle" and snap["flow"]["recipe"] is None
     rig.run(0.1)
     assert not rig.valve_open(), "cancel closes the valve"
+    rig.run(0.5)
+    shown = rig.sim.debug_state()
+    assert (shown["screen"], shown["rgb"]) == ("idle", "off") and shown["beep"] != "error", \
+        "a cancel is not an error: no X, no red, no error beep ({})".format(shown)
     rig.run(3.0)
     assert rig.state() == "idle"
     assert rig.snap()["stats"]["total"]["runs"] == 0, "a cancelled run is not a saving"
@@ -763,6 +767,8 @@ def safety_stop_within_200_ms():
     flow = rig.flow()
     assert flow["error"] == "stopped" and 30 < flow["dispensed_ml"] < 200
     assert "went in before the stop" in flow["hint"]
+    shown = rig.sim.debug_state()
+    assert (shown["screen"], shown["rgb"], shown["beep"]) == ("error", "red", "error"), shown
     rig.run(119.0)
     assert rig.state() == "error"
     rig.run(2.0)
@@ -929,6 +935,8 @@ def knob_three_detents_place_the_vessel_and_press_stops():
     rig.run(0.1)
     assert not rig.valve_open() and rig.clock.t - started <= 0.2
     assert rig.state() == "error" and rig.flow()["error"] == "stopped"
+    shown = rig.sim.debug_state()
+    assert (shown["screen"], shown["rgb"], shown["beep"]) == ("error", "red", "error"), shown
 
 
 @test

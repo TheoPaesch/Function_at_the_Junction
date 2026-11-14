@@ -425,17 +425,42 @@ static void scenarioVirtual() {
   CHECK(rpc_dispense(1000.0f));
   runMs(3000);
   CHECK(host.pinOut[D7] == HIGH);
+  size_t tonesBefore = host.tones.size();
   CHECK(rpc_stop());
   pass();                                                        // the very next pass
   CHECK(host.pinOut[D7] == LOW);
   kind = waitEnd(100, &value);
   CHECK(kind == "error_stopped");
   CHECK_NEAR(value, (3.0 - 0.3) * 30.0, 10.0);                   // what went in before the stop
+  runMs(300);
+  CHECK(rgbIs(false, false, false));                             // Python asked: it says what to show
+  CHECK(host.tones.size() == tonesBefore);                       // and what to play
+  CHECK(rpc_show(6));                                            // the STOP button: Python shows the X
+  CHECK(rpc_beep(4));
+  runMs(300);
   CHECK(rgbIs(true, false, false));
-  CHECK(host.tones.size() > 0 && host.tones.back().first == 196);            // low error tone
+  CHECK(px(2, 0) != 0 && px(6, 3) != 0 && px(6, 0) == 0);        // the X is on the matrix
+  CHECK(host.tones.size() == tonesBefore + 1 && host.tones.back().first == 196);   // low error tone
   runMs(1000);
   CHECK(stMode() == 0 && !stValve());
   CHECK(rpc_show(0));
+
+  section("cancel: stop() and show(0) arriving together");
+  CHECK(rpc_dispense(1000.0f));
+  runMs(2000);
+  tonesBefore = host.tones.size();
+  cursor = Bridge.notes.size();
+  CHECK(rpc_stop());                                             // both handlers before the next loop pass
+  CHECK(rpc_show(0));
+  pass();
+  CHECK(host.pinOut[D7] == LOW);
+  kind = waitEnd(100, &value);
+  CHECK(kind == "error_stopped");
+  runMs(400);
+  CHECK(rgbIs(false, false, false));                             // a cancel is not an error:
+  CHECK(host.tones.size() == tonesBefore);                       // no red, no error tone,
+  CHECK(px(6, 0) != 0 && px(2, 0) == 0);                         // and the idle drop, not the X
+  runMs(600);
 
   section("safety: link lost (no ping for 2 s)");
   CHECK(rpc_dispense(1000.0f));
@@ -543,12 +568,16 @@ static void scenarioVirtual() {
   CHECK(rpc_dispense(1000.0f));                                  // while water runs it is a stop button
   runMs(2000);
   cursor = Bridge.notes.size();
+  host.tones.clear();
   host.knobPressed = true;
   kind = waitEnd(300, &value);
   host.knobPressed = false;
   CHECK(kind == "error_stopped");
   CHECK(host.pinOut[D7] == LOW);
   runMs(500);
+  CHECK(rgbIs(true, false, false));                              // the board's own stop: red,
+  CHECK(host.tones.size() == 1 && host.tones[0].first == 196);   // the error tone,
+  CHECK(px(2, 0) != 0 && px(6, 3) != 0);                         // and the X
   CHECK(rpc_show(0));
 
   section("buzzer patterns");

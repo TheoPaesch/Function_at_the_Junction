@@ -376,7 +376,7 @@ class SimLink(BoardLink):
             if not self.has_knob:
                 return
             if self._mode == MODE_DISPENSING:
-                self._req_stop = True          # the Knob is also a hardware stop button
+                self._req_local_stop = True    # the Knob is also a hardware stop button
             self._emit("knob_press", 1.0)
 
     def set_tilt(self, tilted):
@@ -424,7 +424,8 @@ class SimLink(BoardLink):
         self._lead_s = LEAD_DEFAULT_S
         self._cal = None
         # requests set by handlers, done by the loop
-        self._req_stop = False
+        self._req_stop = False            # Python called stop(): it mirrors the screen itself
+        self._req_local_stop = False      # the Knob was pressed while water ran
         self._req_tare = False
         self._req_dispense = None
         # outputs
@@ -477,6 +478,7 @@ class SimLink(BoardLink):
         self._nf_ring.extend([self._start_g] * self._nf_ring.maxlen)
         self._dispensed_g = 0.0
         self._req_stop = False
+        self._req_local_stop = False
         self._error_active = False
         self._screen = 4
         self._mode = MODE_DISPENSING
@@ -498,14 +500,18 @@ class SimLink(BoardLink):
             self._flow_win_g = net
             self._nf_ring.append(net)
 
-    def _safety_stop(self, code, t):
+    def _safety_stop(self, code, t, local=True):
+        """local: the board found the problem itself, so it shows the X, goes red and beeps.
+        After Python's own stop() it only closes the valve and reports."""
         self._set_valve(False, t)
         self._mode = MODE_IDLE
         self._dispensed_g = max(0.0, self._net() - self._start_g)
-        self._error_active = True
-        self._screen = 6
-        self._last_beep = 4
-        self._last_beep_t = t
+        self._green_until = t
+        if local:
+            self._error_active = True
+            self._screen = 6
+            self._last_beep = 4
+            self._last_beep_t = t
         self._emit("error_" + code, self._dispensed_g)
 
     def _finish(self, t):
@@ -549,7 +555,7 @@ class SimLink(BoardLink):
             net = self._net()
             open_for = t1 - self._start_t
             code = None
-            if self._req_stop:
+            if self._req_stop or self._req_local_stop:
                 code = "stopped"
             elif open_for > self._timeout_s:
                 code = "timeout"
@@ -563,7 +569,7 @@ class SimLink(BoardLink):
                   and t1 - self._tilt_since > TILT_HOLD_S):
                 code = "tilt"
             if code:
-                self._safety_stop(code, t1)
+                self._safety_stop(code, t1, local=not self._req_stop)
             else:
                 estimate = net
                 if self._flow_est > 0.0:
@@ -575,12 +581,13 @@ class SimLink(BoardLink):
                     self._settle_t = t1
         elif self._mode == MODE_SETTLING:
             if self._req_stop:
-                self._safety_stop("stopped", t1)
+                self._safety_stop("stopped", t1, local=False)
             elif self._net() < self._start_g - VESSEL_DROP_G:
                 self._safety_stop("vessel_removed", t1)
             elif t1 - self._settle_t >= SETTLE_S:
                 self._finish(t1)
         self._req_stop = False
+        self._req_local_stop = False
 
         # 5. boot event until Python has asked for info(), then status every 200 ms
         if not self._synced and t1 >= self._next_boot_t:

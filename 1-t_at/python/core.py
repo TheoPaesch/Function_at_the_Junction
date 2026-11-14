@@ -619,10 +619,11 @@ class Machine(object):
         now = self._clock()
         with self._lock:
             if self._state == "dispensing":
-                self._fail("stopped", now, from_mcu=True)
-            elif self._state in ("vessel", "ingredient", "ready"):
-                self._to_idle(now)
-            self._send("stop", front=True)
+                self._fail("stopped", now)      # queues stop first, then the error screen and beep
+            else:
+                if self._state in ("vessel", "ingredient", "ready"):
+                    self._to_idle(now)
+                self._send("stop", front=True)
         self._flush()
         return self._reply(True)
 
