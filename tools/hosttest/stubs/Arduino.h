@@ -56,6 +56,7 @@ struct HostEnv {
   bool buzzerPresent = true;
   int16_t knobPos = 0;
   bool knobPressed = false;
+  bool knobFailing = false;           // unplugged at runtime: reads take 100 ms and return 0
   std::vector<std::pair<int, int> > tones;
   int i2cTransfers = 0;
 

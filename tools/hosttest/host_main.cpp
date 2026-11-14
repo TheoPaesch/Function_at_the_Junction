@@ -493,9 +493,43 @@ static void scenarioVirtual() {
   CHECK_NEAR(stNet() - before, 150.0, 1.0);                      // 50 g per detent
   CHECK(countNotes("mcu_event", "knob_turn", mark) == 1);
   CHECK_NEAR(lastEventValue("knob_turn"), 3.0, 0.01);
-  host.knobPos = (int16_t)(host.knobPos - 100);
+  CHECK(rpc_sim_set(100.0f));
+  host.knobPos = (int16_t)(host.knobPos - 5);
   runMs(400);
-  CHECK(stNet() > -1000.0);                                      // the plate never goes below zero
+  CHECK_NEAR(simGross, 0.0, 0.01);                               // the plate never goes below zero
+
+  // A loose cable: reads take 100 ms and report position 0, like the real library does.
+  CHECK(rpc_sim_set(900.0f));
+  CHECK(rpc_tare());
+  runMs(1500);
+  host.knobPos = 37;
+  runMs(200);                                                    // 37 clicks at once is not a hand
+  CHECK_NEAR(stNet(), 0.0, 1.0);
+  mark = Bridge.notes.size();
+  uint64_t worstBefore = worstPassUs;
+  worstPassUs = 0;
+  host.knobFailing = true;
+  int transfers = host.i2cTransfers;
+  runMs(2500);
+  CHECK(host.i2cTransfers - transfers == 1);                     // one slow read, then it backs off
+  CHECK(worstPassUs > 90000 && worstPassUs < 110000);            // that one read cost 100 ms
+  CHECK(countNotes("mcu_event", "knob_turn", mark) == 0);        // the bogus 0 moved nothing
+  CHECK_NEAR(stNet(), 0.0, 1.0);
+  CHECK(rpc_dispense(250.0f));                                   // water runs: the bus is left alone
+  worstPassUs = 0;
+  transfers = host.i2cTransfers;
+  cursor = Bridge.notes.size();
+  kind = waitEnd(30000, &value);
+  CHECK(kind == "done");
+  CHECK_NEAR(value, 250.0, 10.0);
+  CHECK(host.i2cTransfers - transfers <= 2);
+  host.knobFailing = false;                                      // plugged back in
+  runMs(3500);
+  CHECK(countNotes("mcu_event", "knob_turn", mark) == 0);
+  host.knobPos = (int16_t)(host.knobPos + 2);
+  runMs(300);
+  CHECK_NEAR(lastEventValue("knob_turn"), 2.0, 0.01);            // and it works again
+  worstPassUs = worstBefore;
   CHECK(rpc_sim_set(900.0f));
   CHECK(rpc_tare());
   runMs(1500);

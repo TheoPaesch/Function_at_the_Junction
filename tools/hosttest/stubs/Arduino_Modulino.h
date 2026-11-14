@@ -15,16 +15,25 @@ class ModulinoClass {
 class ModulinoKnob {
  public:
   bool begin() { return host.knobPresent; }
+  // Like the real library: a module that does not answer costs 100 ms, then
+  // get() reports 0 and isPressed() keeps its last value.
   int16_t get() {
     host.i2cTransfers++;
+    if (host.knobFailing) {
+      host.advance(100000);
+      return 0;
+    }
     host.advance(400);            // an I2C read is not free
+    pressed_ = host.knobPressed;
     return host.knobPos;
   }
   bool isPressed() {
-    host.i2cTransfers++;
-    host.advance(400);
-    return host.knobPressed;
+    get();
+    return pressed_;
   }
+
+ private:
+  bool pressed_ = false;
 };
 
 class ModulinoBuzzer {

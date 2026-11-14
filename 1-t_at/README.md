@@ -141,6 +141,7 @@ There is no login: anyone on the same network can start and stop the water. Run 
 - **Vessel step**: the reference is the lowest weight seen since the step began, so taking an old kettle off and putting an empty one on is detected too.
 - **Safety beyond the brief**: Python does not start the water when the vessel left the plate after the tare, and the board refuses `dispense` in that case as well. While water runs, a Knob press stops it on the board itself.
 - **Lead time**: the learning step is limited to 0.3 s per run so one odd run cannot throw it off.
+- **Knob faults**: the Modulino library waits up to 100 ms for a Knob that does not answer and then reports position 0. The sketch treats such a slow read as failed, ignores it, stays off the I2C bus for 3 s (and completely while the valve is open), and ignores jumps of more than 30 clicks.
 - **Events**: an error event carries the grams dispensed before the stop. The board repeats its `boot` event every 2 s until Python has asked for `info()`, so a missed event cannot leave it without its parameters.
 - **Knob with a real scale**: turning it changes the portions before the water starts (not when the user gave a weight).
 - **Timeouts**: the done screen returns to Home after 60 s, an error after 2 minutes.

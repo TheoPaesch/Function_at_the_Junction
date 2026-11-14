@@ -46,6 +46,9 @@ const int PIN_VALVE = D7;     // valve driver, HIGH = open
 // selftest.py checks that the two stay in step.
 const uint32_t STATUS_PERIOD_MS = 200;
 const uint32_t KNOB_PERIOD_MS = 30;
+const uint32_t KNOB_SLOW_MS = 20;         // a read that takes this long has failed
+const uint32_t KNOB_BACKOFF_MS = 3000;    // then leave the I2C bus alone for a while
+const int KNOB_MAX_JUMP = 30;             // more detents than a hand can turn between two polls
 const uint32_t MATRIX_PERIOD_MS = 80;
 const uint32_t BOOT_REPEAT_MS = 2000;
 const uint32_t HX_DETECT_MS = 600;
@@ -190,7 +193,10 @@ int rgbShown = -1;
 uint32_t matrixLastMs = 0;
 
 // knob
-int16_t knobLastPos = 0;
+int16_t knobLastPos = 0;      // last position we acted on
+int16_t knobPrevRaw = 0;      // previous reading: a position counts once it was read twice
+bool knobFault = false;       // the last read failed (module unplugged?)
+uint32_t knobRetryMs = 0;
 int knobTurnPending = 0;
 uint32_t knobLastMs = 0;
 uint32_t knobTurnSentMs = 0;
@@ -876,31 +882,62 @@ void beepUpdate(uint32_t now) {
   beepIdx++;
 }
 
+// The Modulino library waits up to 100 ms for a module that does not answer
+// and then reports position 0. A read that slow is a failed read: ignore it
+// and stay off the bus for a while, and completely while the valve is open,
+// so a loose Knob cable can never stall the dispense loop.
+bool knobReadFailed(uint32_t startedMs) {
+  if (millis() - startedMs <= KNOB_SLOW_MS) {
+    return false;
+  }
+  knobFault = true;
+  knobRetryMs = millis() + KNOB_BACKOFF_MS;
+  return true;
+}
+
 void knobUpdate(uint32_t now) {
   if (!hasKnob || now - knobLastMs < KNOB_PERIOD_MS) {
     return;                        // about every 30 ms: each poll costs an I2C transfer
   }
+  if (knobFault && (valveOpen || timeAfter(knobRetryMs, now))) {
+    return;
+  }
   knobLastMs = now;
 
+  uint32_t started = millis();
   int16_t pos = knob.get();
-  int16_t diff = (int16_t)(pos - knobLastPos);
-  knobLastPos = pos;
-  if (diff != 0) {
-    if (!realScale) {              // virtual mode: each detent adds or removes 50 g
-      simGross += KNOB_STEP_G * (float)diff;
-      if (simGross < 0.0f) {
-        simGross = 0.0f;
-      }
-    }
-    knobTurnPending += diff;
+  if (knobReadFailed(started)) {
+    return;
   }
+  bool raw = knob.isPressed();
+  if (knobReadFailed(started)) {
+    return;
+  }
+  knobFault = false;
+
+  if (pos == knobPrevRaw && pos != knobLastPos) {  // the same position twice in a row
+    int diff = (int16_t)(pos - knobLastPos);
+    knobLastPos = pos;
+    if (diff > KNOB_MAX_JUMP || diff < -KNOB_MAX_JUMP) {
+      diff = 0;                    // a glitch or a re-plugged module: resynchronise, do not act
+    }
+    if (diff != 0) {
+      if (!realScale) {            // virtual mode: each detent adds or removes 50 g
+        simGross += KNOB_STEP_G * (float)diff;
+        if (simGross < 0.0f) {
+          simGross = 0.0f;
+        }
+      }
+      knobTurnPending += diff;
+    }
+  }
+  knobPrevRaw = pos;
   if (knobTurnPending != 0 && now - knobTurnSentMs >= 100UL) {
     sendEvent("knob_turn", (float)knobTurnPending);
     knobTurnPending = 0;
     knobTurnSentMs = now;
   }
 
-  bool raw = knob.isPressed();
   if (raw == knobLastRaw && raw != knobDown) {     // two equal polls in a row: debounced
     knobDown = raw;
     if (knobDown) {
@@ -1127,6 +1164,7 @@ void setup() {
   hasBuzzer = buzzer.begin();
   if (hasKnob) {
     knobLastPos = knob.get();
+    knobPrevRaw = knobLastPos;
   }
 
 #if USE_TILT
