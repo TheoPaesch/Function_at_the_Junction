@@ -78,6 +78,16 @@ Recipes live in `python/recipes.json`; the UI, the parser and the maths all read
 
 Synonyms are in `recipes.json` too. Two bits of syntax keep them short: `*tee` or `kartoffel*` is a wildcard for German compounds (Pfefferminztee, Kartoffelsalat), and `instant+nudeln` means both words anywhere in the text.
 
+## Demo script (about two minutes, virtual scale)
+
+1. Open the page on the phone. On the board the drop pulses on the LED matrix.
+2. Type "Kartoffeln für 3" and tap Go. While the local model reads it the matrix shows the thinking dots; the card then says "Potatoes · 3 people · about 1.1 L water" and how it was understood. Tap Start.
+3. "Put the empty pot on the plate": tap "Place pot (virtual)", or turn the Knob at least three clicks. The scale zeroes itself.
+4. "Put the potatoes in": turn the Knob (50 g per click) or tap "+250 g". Grams and water update live. Press the Knob or tap Done.
+5. The countdown runs on the phone and on the matrix, the LED turns blue, and the water level rises on the matrix while the ring fills on the phone.
+6. Done: check mark, green LED, three rising tones, and the phone shows what was saved.
+7. Safety: start a tea and press the Knob (or tap STOP) while the water runs. The valve closes at once, the LED turns red and the matrix shows the X. Setting the virtual flow to 0 in Settings shows the "no water" stop instead.
+
 ## Wiring
 
 - **Modulino Knob and Modulino Buzzer**: chained on the Qwiic connector. Both are optional and detected at boot. With the virtual scale each Knob click adds or removes 50 g; a press means next / done, and it stops the water while the valve is open.
