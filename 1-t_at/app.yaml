@@ -1,0 +1,9 @@
+name: "1-T_AT"
+icon: 💧
+description: Cooking water assistant that dispenses only the water you need
+bricks:
+  - arduino:web_ui
+  - arduino:llm:
+      model: llamacpp:Qwen3.5-0.8B-Q4_0
+      variables:
+        LLAMA_ARG_CTX_SIZE: "2048"
