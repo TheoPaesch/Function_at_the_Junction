@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    name: Self-test (no board needed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: App self-test (state machine, parser, energy maths, simulated board)
+        run: python3 1-t_at/python/selftest.py
+
+      - name: Sketch logic on the host (the real sketch.ino against stub headers)
+        run: tools/hosttest/run.sh
+
+      - name: Import ZIP builds with app.yaml at its root
+        run: |
+          tools/make_zip.sh
+          unzip -l dist/1-t_at.zip
+
+  sketch:
+    name: Compile the sketch (arduino:zephyr:unoq)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/bin" sh
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Update the core index
+        run: arduino-cli core update-index
+
+      - name: Install the UNO Q core
+        run: arduino-cli core install arduino:zephyr
+
+      - name: Install Arduino_Modulino (its dependencies install with it)
+        run: arduino-cli lib install "Arduino_Modulino@0.7.0"
+
+      - name: Versions
+        run: |
+          arduino-cli version
+          arduino-cli core list
+          arduino-cli lib list
+
+      - name: Compile
+        run: |
+          set -o pipefail
+          arduino-cli compile --fqbn arduino:zephyr:unoq 1-t_at/sketch 2>&1 | tee compile.log
+
+      - name: Show compiler errors on the pull request
+        if: failure()
+        run: |
+          test -f compile.log || exit 0
+          # errors in our sketch become annotations on the right line
+          sed -nE 's#^.*/(1-t_at/sketch/[^:]+):([0-9]+):([0-9]+): (fatal error|error): (.*)$#::error file=\1,line=\2,col=\3::\5#p' compile.log | head -10
+          # everything else that looks like an error, as plain annotations
+          grep -E "error|Error|undefined reference|not found|No such" compile.log | grep -v "1-t_at/sketch/" | head -10 | sed 's/^/::error title=Sketch build::/' || true
