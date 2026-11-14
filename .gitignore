@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output (tools/make_zip.sh)
+dist/
+
+# Local data written by dev mode (on the board this is /app/data)
+1-t_at/data/
+
+# Host test build output (tools/hosttest/run.sh)
+tools/hosttest/build/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
