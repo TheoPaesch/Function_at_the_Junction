@@ -32,7 +32,7 @@ sys.path.insert(0, HERE)
 
 try:
     import uvicorn
-    from fastapi import FastAPI
+    from fastapi import FastAPI, HTTPException
     from fastapi.staticfiles import StaticFiles
 except ImportError:
     sys.exit("Dev mode needs FastAPI and uvicorn:  pip install fastapi uvicorn")
@@ -51,7 +51,10 @@ class FreshStaticFiles(StaticFiles):
     """Static files that are never cached, so an edit shows up on the phone at once."""
 
     async def get_response(self, path, scope):
-        response = await super().get_response(path, scope)
+        try:
+            response = await super().get_response(path, scope)
+        except ValueError:                       # a null byte in the path, for example
+            raise HTTPException(status_code=404)
         response.headers["Cache-Control"] = "no-store"
         return response
 
