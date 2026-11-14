@@ -1,0 +1,81 @@
+[
+  {
+    "id": "tea",
+    "name": "Tea",
+    "emoji": "🍵",
+    "vessel": "kettle",
+    "unit": "cup",
+    "default_portions": 1,
+    "max_portions": 12,
+    "water": { "type": "per_portion", "ml_per_portion": 250 },
+    "grams_per_portion": null,
+    "weigh_in_pot": false,
+    "baseline": { "type": "factor", "value": 2.0 },
+    "baseline_note": "Survey: tea drinkers boil about double the water they need.",
+    "tip": "Pour it while it is hot: water that cools in the kettle gets boiled twice.",
+    "note": null,
+    "synonyms": ["tea", "cup", "mug", "chai", "Tee", "Tasse", "cuppa", "Teewasser", "*tee"]
+  },
+  {
+    "id": "noodles",
+    "name": "Instant noodles",
+    "emoji": "🍜",
+    "vessel": "kettle",
+    "unit": "pack",
+    "default_portions": 1,
+    "max_portions": 12,
+    "water": { "type": "per_portion", "ml_per_portion": 500 },
+    "grams_per_portion": null,
+    "weigh_in_pot": false,
+    "baseline": { "type": "factor", "value": 2.0 },
+    "baseline_note": "Assumed: the same kettle habit as for tea, about double.",
+    "tip": "Cover the bowl while the noodles soak: they stay hot without more boiling.",
+    "note": "Check the packet: some packs need less than 500 ml.",
+    "synonyms": [
+      "instant noodles", "ramen", "cup noodles", "mie", "Instantnudeln", "Nudelsuppe",
+      "noodle", "noodles",
+      "instant+noodles", "instant+noodle", "instant+ramen", "instant+nudeln", "instant+nudel",
+      "ramen+nudeln", "mie+nudeln", "cup+noodles", "cup+noodle", "pot+noodle", "noodle+soup"
+    ]
+  },
+  {
+    "id": "pasta",
+    "name": "Pasta",
+    "emoji": "🍝",
+    "vessel": "pot",
+    "unit": "person",
+    "default_portions": 2,
+    "max_portions": 12,
+    "water": { "type": "per_gram", "ml_per_g": 5, "min_ml": 1000 },
+    "grams_per_portion": 100,
+    "weigh_in_pot": false,
+    "baseline": { "type": "ml_per_g", "value": 10 },
+    "baseline_note": "The classic rule: 1 litre of water per 100 g of pasta.",
+    "tip": "Lid on until it boils, then add the pasta and turn the heat down.",
+    "note": null,
+    "synonyms": [
+      "pasta", "spaghetti", "penne", "fusilli", "macaroni", "Nudeln", "Nudel", "Makkaroni",
+      "tagliatelle", "farfalle", "rigatoni", "linguine", "*nudeln"
+    ]
+  },
+  {
+    "id": "potatoes",
+    "name": "Potatoes",
+    "emoji": "🥔",
+    "vessel": "pot",
+    "unit": "person",
+    "default_portions": 2,
+    "max_portions": 12,
+    "water": { "type": "per_gram_plus", "ml_per_g": 1.0, "plus_ml": 300 },
+    "grams_per_portion": 250,
+    "weigh_in_pot": true,
+    "baseline": { "type": "factor", "value": 2.0 },
+    "baseline_note": "Assumed: about double the water that just covers them.",
+    "tip": "Lid on, and turn the heat down once it boils.",
+    "note": null,
+    "synonyms": [
+      "potato", "potatoes", "Kartoffel", "Kartoffeln", "Erdäpfel", "Erdapfel", "spuds",
+      "*kartoffel", "*kartoffeln", "kartoffel*"
+    ]
+  }
+]
