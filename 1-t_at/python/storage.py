@@ -73,7 +73,7 @@ def _number(value):
         return None
     try:
         number = float(str(value).replace(",", ".")) if isinstance(value, str) else float(value)
-    except ValueError:
+    except (ValueError, OverflowError):                     # text, or an integer too large for a float
         return None
     if number != number or number in (float("inf"), float("-inf")):
         return None
@@ -121,9 +121,8 @@ def _total_of(runs):
     total = dict(EMPTY_TOTAL)
     for run in runs:
         total["runs"] += 1
-        total["saved_ml"] += float(run.get("saved_ml") or 0)
-        total["saved_wh"] += float(run.get("saved_wh") or 0)
-        total["saved_eur"] += float(run.get("saved_eur") or 0)
+        for key in ("saved_ml", "saved_wh", "saved_eur"):
+            total[key] += _number(run.get(key)) or 0.0      # text or junk in the file counts as 0
     return total
 
 
@@ -246,9 +245,8 @@ class Storage(object):
             self._runs.append(run)
             del self._runs[:-HISTORY_MAX]
             self._total["runs"] += 1
-            self._total["saved_ml"] += float(run.get("saved_ml") or 0)
-            self._total["saved_wh"] += float(run.get("saved_wh") or 0)
-            self._total["saved_eur"] += float(run.get("saved_eur") or 0)
+            for key in ("saved_ml", "saved_wh", "saved_eur"):
+                self._total[key] += _number(run.get(key)) or 0.0
             self._write(self._history_path, {"version": 1, "total": self._total, "runs": self._runs})
         return run
 

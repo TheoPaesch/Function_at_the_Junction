@@ -143,22 +143,24 @@ class RecipeBook(object):
 
     def clamp_portions(self, recipe, portions):
         """A whole number of portions between 1 and max_portions (default if missing)."""
+        if isinstance(portions, bool):
+            return recipe["default_portions"]
         try:
             value = int(round(float(portions)))
-        except (TypeError, ValueError):
-            return recipe["default_portions"]
-        if isinstance(portions, bool):
+        except (TypeError, ValueError, OverflowError):      # None, text, NaN, infinity, 10**400
             return recipe["default_portions"]
         return max(1, min(recipe["max_portions"], value))
 
     @staticmethod
     def clamp_grams(grams):
         """Whole grams between 1 and MAX_GRAMS, or None when no weight was given."""
+        if isinstance(grams, bool):
+            return None
         try:
             value = int(round(float(grams)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):      # None, text, NaN, infinity, 10**400
             return None
-        if isinstance(grams, bool) or value <= 0:
+        if value <= 0:
             return None
         return min(MAX_GRAMS, value)
 

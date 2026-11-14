@@ -61,11 +61,12 @@ ERROR_HINT = {
 
 
 def _number(value):
+    """A finite float, or None. JSON may carry NaN, Infinity or integers too large for a float."""
     if isinstance(value, bool):
         return None
     try:
         number = float(str(value).replace(",", ".")) if isinstance(value, str) else float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return number if number == number and abs(number) != float("inf") else None
 
@@ -560,6 +561,9 @@ class Machine(object):
         """Start the flow at the vessel step. Accepted only in idle, done or error."""
         now = self._clock()
         recipe = self.book.get(recipe_id)
+        if recipe is not None:      # worked out before the flow is touched: a bad value changes nothing
+            portions = self.book.clamp_portions(recipe, portions)
+            grams = self.book.clamp_grams(grams) if self.book.uses_grams(recipe) else None
         with self._lock:
             if self._state not in SELECTABLE_STATES:
                 ok, note = False, "Something is already in progress."
@@ -569,8 +573,8 @@ class Machine(object):
                 ok, note = True, None
                 self._reset_flow()
                 self._recipe = recipe
-                self._portions = self.book.clamp_portions(recipe, portions)
-                self._grams = self.book.clamp_grams(grams) if self.book.uses_grams(recipe) else None
+                self._portions = portions
+                self._grams = grams
                 if self.board.reachable():
                     self._enter_vessel(now)
                 else:
@@ -692,7 +696,7 @@ class Machine(object):
         elif action == "set":
             ok, _ = self.board.call("sim_set", max(0.0, min(20000.0, amount)))
         elif action == "knob_turn" and hasattr(link, "knob_turn"):      # dev mode only
-            link.knob_turn(int(round(amount)) or 1)
+            link.knob_turn(int(max(-40.0, min(40.0, round(amount)))) or 1)
             ok = True
         elif action == "knob_press" and hasattr(link, "knob_press"):    # dev mode only
             link.knob_press()

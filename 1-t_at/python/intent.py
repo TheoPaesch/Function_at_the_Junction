@@ -308,7 +308,7 @@ def _whole(value, low, high):
         return None
     try:
         number = int(round(float(value)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):          # text, NaN, infinity, 10**400
         return None
     if number < low:
         return None

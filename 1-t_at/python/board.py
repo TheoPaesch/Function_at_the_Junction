@@ -71,6 +71,7 @@ GREEN_S = 3.0
 BOOT_REPEAT_S = 2.0
 FLOW_GPS_DEFAULT = 30.0
 FLOW_GPS_MAX = 200.0
+SIM_MAX_G = 50000.0            # the virtual plate holds at most 50 kg
 
 
 def dispense_timeout_s(ml):
@@ -154,8 +155,11 @@ class Board(object):
                 "flow_gps": float(flow_gps),
                 "virtual_scale": bool(virtual_scale),
             }
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return
+        for key in ("net_g", "dispensed_g", "flow_gps"):
+            if status[key] != status[key] or abs(status[key]) == float("inf"):
+                return                      # NaN or infinity: ignore it, the board then counts as offline
         with self._lock:
             self._seq += 1
             status["seq"] = self._seq
@@ -243,7 +247,7 @@ class Board(object):
             return False, None
         try:
             converted = [kind(arg) for kind, arg in zip(types, args)]
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             log.error("bad arguments for MCU call %s%r", name, args)
             return False, None
         if not force and not self.reachable():
@@ -368,7 +372,7 @@ class SimLink(BoardLink):
         with self._lock:
             if not self.has_knob or not detents:
                 return
-            self._gross = max(0.0, self._gross + KNOB_STEP_G * int(detents))
+            self._gross = max(0.0, min(SIM_MAX_G, self._gross + KNOB_STEP_G * int(detents)))
             self._emit("knob_turn", float(int(detents)))
 
     def knob_press(self):
@@ -636,11 +640,15 @@ class SimLink(BoardLink):
         return True
 
     def _rpc_sim_add(self, grams):
-        self._gross = max(0.0, self._gross + float(grams))
+        if grams != grams:                  # NaN
+            return False
+        self._gross = max(0.0, min(SIM_MAX_G, self._gross + float(grams)))
         return True
 
     def _rpc_sim_set(self, grams):
-        self._gross = max(0.0, float(grams))
+        if grams != grams:
+            return False
+        self._gross = max(0.0, min(SIM_MAX_G, float(grams)))
         return True
 
     def _rpc_show(self, screen):
@@ -658,6 +666,8 @@ class SimLink(BoardLink):
         return True
 
     def _rpc_set_param(self, name, value):
+        if value != value:                  # NaN
+            return False
         if name == "flow_gps":
             self._flow_gps = max(0.0, min(FLOW_GPS_MAX, float(value)))
         elif name == "lead_s":

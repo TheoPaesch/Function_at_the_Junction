@@ -507,7 +507,7 @@ def snapshot_shape():
     empty = {"runs": 0, "saved_ml": 0, "saved_wh": 0, "saved_eur": 0}
     assert snap["stats"] == {"today": empty, "total": empty}
     assert snap["llm"]["status"] == "off" and snap["llm"]["last_ms"] is None
-    json.dumps(snap)        # everything must be JSON
+    json.dumps(snap, allow_nan=False)       # strict JSON: no NaN, no Infinity
 
 
 @test
@@ -887,6 +887,69 @@ def lost_done_event_is_recovered():
     rig.sim._on_event = lambda kind, value: None if kind == "done" else real(kind, value)
     rig.wait("done", 60)
     assert close(rig.snap()["last_run"]["dispensed_ml"], 500, 10)
+
+
+@test
+def hostile_numbers_change_nothing():
+    """JSON can carry NaN, Infinity and integers too large for a float. None of it may
+    raise, leave the flow half set or reach the board."""
+    rig = Rig()
+    inf, nan, huge = float("inf"), float("nan"), 10 ** 400
+    for bad in (inf, -inf, nan, huge, -huge, "many", [], {}, True, None):
+        snap = rig.m.select("tea", bad, bad)
+        assert snap["ok"] and snap["flow"]["state"] == "vessel", bad
+        assert snap["flow"]["portions"] in (1, 12) and snap["flow"]["grams"] is None, (bad, snap["flow"])
+        assert rig.m.cancel()["flow"]["state"] == "idle"
+    for bad in (inf, nan, huge, "many", [], {}):
+        snap = rig.m.select("pasta", 2, bad)
+        assert snap["ok"] and snap["flow"]["grams"] is None and snap["flow"]["target_ml"] == 1000, bad
+        rig.m.cancel()
+    for bad in (123, [], {}, None, inf, "pizza"):
+        snap = rig.m.select(bad, 2)
+        assert not snap["ok"] and snap["flow"]["state"] == "idle" and snap["flow"]["recipe"] is None, bad
+
+    before = rig.m.settings()
+    for bad in (inf, -inf, nan, huge, "x", [], {}, None):
+        after = rig.m.update_settings({"eff_kettle": bad, "t_start_c": bad, "kettle_min_ml": bad,
+                                       "flow_gps": bad, "price_eur_per_kwh": bad, "kettle_kw": bad,
+                                       "baselines": {"tea": bad}})
+        assert after == before, (bad, after)
+    assert rig.m.update_settings([]) == before and rig.m.update_settings(None) == before
+    assert rig.m.update_settings({"baselines": [1, 2]}) == before
+
+    weight = rig.snap()["scale"]["net_g"]
+    for bad in (inf, nan, huge, "x", [], None):
+        assert rig.m.sim("add", bad)["ok"]          # adds nothing
+        assert rig.m.sim("set", bad)["ok"]          # sets it to zero
+    rig.run(0.5)
+    assert close(rig.snap()["scale"]["net_g"], weight, 1.0)
+    assert not rig.m.sim(None)["ok"] and not rig.m.sim(["add"], 5)["ok"]
+    assert not rig.m.calibrate(nan)["ok"] and not rig.m.calibrate(huge)["ok"]
+    for text in (None, 7, [], {}, nan):
+        assert rig.m.parse(text)["ok"] is False
+
+    # the simulated board refuses the same nonsense the sketch refuses
+    assert rig.sim.call("set_param", "flow_gps", nan) is False
+    assert rig.sim.call("sim_add", nan) is False and rig.sim.call("dispense", nan) is False
+    assert rig.sim.call("sim_set", 1e9) is True and rig.sim._gross == board.SIM_MAX_G
+    rig.sim.call("sim_set", 0.0)
+
+    # a status with NaN in it is ignored, so the phone always gets strict JSON
+    good = rig.board.status()["seq"]
+    rig.board._on_status(nan, True, False, 0, 0.0, 0.0, True)
+    rig.board._on_status(0.0, True, False, 0, inf, 0.0, True)
+    rig.board._on_status("x", True, False, 0, 0.0, 0.0, True)
+    assert rig.board.status()["seq"] == good
+    json.dumps(rig.snap(), allow_nan=False)
+
+    # a damaged history file must not stop the app from starting
+    with open(os.path.join(rig.dir, "history.json"), "w") as fh:
+        json.dump({"version": 1, "total": {"runs": "lots", "saved_ml": None},
+                   "runs": [{"recipe": "tea", "saved_ml": "a lot", "saved_wh": None, "saved_eur": [1]},
+                            "not a run", {"recipe": "pasta", "saved_ml": 100, "saved_wh": 12.5, "saved_eur": 0.005}]}, fh)
+    again = storage.Storage(rig.dir, wallclock=lambda: rig.wall)
+    assert again.stats()["total"] == {"runs": 2, "saved_ml": 100, "saved_wh": 12.5, "saved_eur": 0.005}
+    json.dumps(again.stats(), allow_nan=False)
 
 
 # ============================================================================
@@ -1394,6 +1457,7 @@ def sketch_constants_match_the_simulation():
         ("GREEN_MS", board.GREEN_S * 1000), ("BOOT_REPEAT_MS", board.BOOT_REPEAT_S * 1000),
         ("SIM_START_LAG_MS", 300), ("SIM_TAIL_MS", 400), ("SIM_NOISE_G", board.NOISE_G),
         ("FLOW_GPS_DEFAULT", board.FLOW_GPS_DEFAULT), ("FLOW_GPS_MAX", board.FLOW_GPS_MAX),
+        ("SIM_MAX_G", board.SIM_MAX_G),
     ]
     for name, expected in pairs:
         assert close(value(name), expected, 1e-6), "{}: sketch {} != simulation {}".format(

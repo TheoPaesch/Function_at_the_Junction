@@ -415,6 +415,13 @@ static void scenarioVirtual() {
   }
   CHECK(rpc_set_param("flow_gps", 30.0f));
   CHECK(!rpc_set_param("nonsense", 1.0f));
+  CHECK(!rpc_set_param("flow_gps", NAN) && !rpc_set_param("lead_s", NAN) && !rpc_set_param("cal", NAN));
+  CHECK(!rpc_sim_add(NAN) && !rpc_sim_set(NAN) && !rpc_dispense(NAN));
+  float keepGross = simGross;
+  CHECK(rpc_sim_set(1e9f));
+  CHECK_NEAR(simGross, 50000.0, 0.01);                           // the virtual plate has a limit
+  CHECK(rpc_sim_set(keepGross));
+  runMs(1500);
   CHECK(rpc_set_param("lead_s", 9.0f));                          // clamped to 2 s
   CHECK(rpc_set_param("lead_s", 0.4f));
 

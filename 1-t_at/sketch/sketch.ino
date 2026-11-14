@@ -67,6 +67,7 @@ const float SIM_NOISE_G = 0.3f;
 const float KNOB_STEP_G = 50.0f;
 const float FLOW_GPS_DEFAULT = 30.0f;
 const float FLOW_GPS_MAX = 200.0f;
+const float SIM_MAX_G = 50000.0f;         // the virtual plate holds at most 50 kg
 
 const uint32_t FLOW_WINDOW_MS = 200;
 const float FLOW_EMA = 0.4f;
@@ -223,7 +224,7 @@ bool timeAfter(uint32_t a, uint32_t b) {
 }
 
 float clampF(float v, float lo, float hi) {
-  if (v < lo) return lo;
+  if (!(v >= lo)) return lo;      // also catches NaN
   if (v > hi) return hi;
   return v;
 }
@@ -933,10 +934,7 @@ void knobUpdate(uint32_t now) {
     }
     if (diff != 0) {
       if (!realScale) {            // virtual mode: each detent adds or removes 50 g
-        simGross += KNOB_STEP_G * (float)diff;
-        if (simGross < 0.0f) {
-          simGross = 0.0f;
-        }
+        simGross = clampF(simGross + KNOB_STEP_G * (float)diff, 0.0f, SIM_MAX_G);
       }
       knobTurnPending += diff;
     }
@@ -1021,21 +1019,18 @@ bool rpc_ping() {
 }
 
 bool rpc_sim_add(float g) {
-  if (realScale) {
+  if (realScale || !(g == g)) {    // g == g is false only for NaN
     return false;
   }
-  simGross += g;
-  if (simGross < 0.0f) {
-    simGross = 0.0f;
-  }
+  simGross = clampF(simGross + g, 0.0f, SIM_MAX_G);
   return true;
 }
 
 bool rpc_sim_set(float g) {
-  if (realScale) {
+  if (realScale || !(g == g)) {
     return false;
   }
-  simGross = g > 0.0f ? g : 0.0f;
+  simGross = clampF(g, 0.0f, SIM_MAX_G);
   return true;
 }
 
@@ -1060,6 +1055,9 @@ bool rpc_beep(int pattern) {
 }
 
 bool rpc_set_param(String name, float value) {
+  if (!(value == value)) {
+    return false;                  // NaN
+  }
   if (name == "flow_gps") {
     simFlowGps = clampF(value, 0.0f, FLOW_GPS_MAX);
   } else if (name == "lead_s") {
