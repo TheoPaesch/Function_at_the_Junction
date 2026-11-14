@@ -115,7 +115,27 @@ There is no login: anyone on the same network can start and stop the water. Run 
 `.github/workflows/ci.yml` runs on every push and pull request, two jobs:
 
 1. `python3 1-t_at/python/selftest.py`, the sketch host test and the import ZIP build.
-2. The sketch compiled with `arduino-cli` for `arduino:zephyr:unoq`. We do not have the board yet, so this job is the only check that the sketch builds against Arduino's real core and libraries.
+2. The sketch compiled with `arduino-cli` for `arduino:zephyr:unoq`, against Arduino's real core and libraries.
+
+To compile the sketch on your own machine, install `arduino-cli` and run the same four commands:
+
+```bash
+arduino-cli core update-index
+```
+
+```bash
+arduino-cli core install arduino:zephyr
+```
+
+```bash
+arduino-cli lib install "Arduino_Modulino@0.7.0"
+```
+
+```bash
+arduino-cli compile --fqbn arduino:zephyr:unoq 1-t_at/sketch
+```
+
+The sketch was last compiled this way with core 1.1.0: about 149 kB of flash (18%) and 60 kB of RAM (22%), no warnings in our code.
 
 ## Where things are
 
@@ -140,6 +160,8 @@ There is no login: anyone on the same network can start and stop the water. Run 
 - **LLM readiness**: the model counts as ready only after a warm request answered within 15 s. After two failed requests in a row it is marked failed and warmed up again in the background.
 - **Vessel step**: the reference is the lowest weight seen since the step began, so taking an old kettle off and putting an empty one on is detected too.
 - **Safety beyond the brief**: Python does not start the water when the vessel left the plate after the tare, and the board refuses `dispense` in that case as well. While water runs, a Knob press stops it on the board itself.
+- **Who shows a stop**: when the board stops the water itself (timeout, no flow, vessel removed, link lost, tilt, Knob press) it shows the X, goes red and beeps on its own, because Python may be gone. After Python's `stop()` it only closes the valve and reports `error_stopped`; Python then sets the screen and the beep, so a cancel shows the idle drop and never an error.
+- **Odd numbers**: NaN, Infinity and oversized numbers in a request are treated as missing. The virtual plate holds at most 50 kg.
 - **Lead time**: the learning step is limited to 0.3 s per run so one odd run cannot throw it off.
 - **Knob faults**: the Modulino library waits up to 100 ms for a Knob that does not answer and then reports position 0. The sketch treats such a slow read as failed, ignores it, stays off the I2C bus for 3 s (and completely while the valve is open), and ignores jumps of more than 30 clicks.
 - **Events**: an error event carries the grams dispensed before the stop. The board repeats its `boot` event every 2 s until Python has asked for `info()`, so a missed event cannot leave it without its parameters.
