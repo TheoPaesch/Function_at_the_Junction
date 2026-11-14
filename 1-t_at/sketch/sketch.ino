@@ -1154,13 +1154,16 @@ void setup() {
   digitalWrite(PIN_VALVE, LOW);
   rgbBegin();
 
+  // Show the drop at once: Bridge.begin() and provide_safe() wait for the
+  // Linux side to answer, and the board should look alive while they do.
+  matrix.begin();
+  matrix.setGrayscaleBits(3);                  // brightness 0..7
+  drawIcon(ICON_DROP, 4);
+  matrix.draw(frame);
+
   Monitor.begin(115200);
   Bridge.begin();
   provideAll();
-
-  matrix.begin();
-  matrix.setGrayscaleBits(3);                  // brightness 0..7
-  frameClear();
 
   calCountsPerG = CAL_DEFAULT;
   simFlowGps = FLOW_GPS_DEFAULT;
