@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Water drop with a fill line">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a8cff"/>
+      <stop offset="1" stop-color="#0a57b8"/>
+    </linearGradient>
+    <clipPath id="drop">
+      <path d="M256 88c68 82 124 152 124 222a124 124 0 0 1-248 0c0-70 56-140 124-222z"/>
+    </clipPath>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <path d="M256 88c68 82 124 152 124 222a124 124 0 0 1-248 0c0-70 56-140 124-222z" fill="#ffffff" fill-opacity=".28"/>
+  <g clip-path="url(#drop)">
+    <path d="M112 318c36-22 72-22 108 0s72 22 108 0 72-22 108 0v140H112z" fill="#ffffff"/>
+  </g>
+  <path d="M256 88c68 82 124 152 124 222a124 124 0 0 1-248 0c0-70 56-140 124-222z" fill="none" stroke="#ffffff" stroke-width="18" stroke-linejoin="round"/>
+</svg>

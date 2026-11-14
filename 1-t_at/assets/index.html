@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cooking water assistant</title>
+  <meta name="description" content="Dispenses only the water your dish needs.">
+  <meta name="theme-color" content="#0b63ce" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#07111d" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5c3.6 4.3 6.5 8 6.5 11.6a6.5 6.5 0 0 1-13 0c0-3.600 2.900-7.300 6.500-11.600z"/></svg>
+      <span id="appName" class="brand-name"></span>
+    </div>
+    <div class="bar-right">
+      <span id="scaleBadge" class="badge" hidden>virtual scale</span>
+      <span id="boardStatus" class="status" data-state="connecting">
+        <span class="dot" aria-hidden="true"></span><span id="boardStatusText">Connecting</span>
+      </span>
+      <button id="settingsBtn" class="icon-btn" type="button" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" role="alert" hidden>Connection lost. Retrying…</div>
+  <p id="live" class="sr-only" aria-live="polite"></p>
+
+  <main id="main">
+    <p id="context" class="context" hidden></p>
+
+    <!-- ============ Home ============ -->
+    <section class="view" data-view="idle">
+      <h1 id="homeTitle" class="home-title" tabindex="-1">What are you making?</h1>
+      <form id="askForm" class="ask" autocomplete="off">
+        <label class="sr-only" for="askInput">Say it in your own words</label>
+        <input id="askInput" type="text" enterkeyhint="go" maxlength="200" autocapitalize="none"
+               autocorrect="off" spellcheck="false" placeholder="e.g. 2 cups of tea">
+        <button id="askGo" class="btn primary" type="submit">Go</button>
+      </form>
+      <div class="chips" aria-label="Examples">
+        <button type="button" class="chip" data-example="2 cups of tea"><span>2 cups of tea</span></button>
+        <button type="button" class="chip" data-example="pasta for 4"><span>pasta for 4</span></button>
+        <button type="button" class="chip" data-example="Kartoffeln für 3"><span>Kartoffeln für 3</span></button>
+      </div>
+
+      <div id="thinking" class="card thinking" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="thinkingText">Reading your order…</span>
+      </div>
+      <div id="confirm" class="card confirm" hidden>
+        <div class="confirm-main">
+          <span id="confirmEmoji" class="confirm-emoji" aria-hidden="true"></span>
+          <div>
+            <p id="confirmLine" class="confirm-line"></p>
+            <p id="confirmBadge" class="pill"></p>
+          </div>
+        </div>
+        <div class="row">
+          <button id="confirmStart" class="btn primary grow" type="button">Start</button>
+          <button id="confirmDismiss" class="btn ghost" type="button">Not this</button>
+        </div>
+      </div>
+      <div id="sorry" class="card sorry" hidden><p id="sorryText"></p></div>
+
+      <h2 class="section-title">Or tap a recipe</h2>
+      <div id="tiles" class="tiles"></div>
+
+      <button id="statsCard" class="card stats" type="button" aria-label="Savings so far. Open history.">
+        <span class="stats-leaf" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14"/><path d="M5 19c2-4 5-7 9-9"/></svg>
+        </span>
+        <span class="stats-text">
+          <b id="statsToday">No runs yet today</b>
+          <span id="statsTotal">Your savings will show up here.</span>
+        </span>
+        <span class="chev" aria-hidden="true">›</span>
+      </button>
+    </section>
+
+    <!-- ============ Vessel ============ -->
+    <section class="view" data-view="vessel" hidden>
+      <div class="art" aria-hidden="true">
+        <svg viewBox="0 0 200 120">
+          <g class="art-vessel">
+            <path class="art-fill" d="M62 34h76l-6 50a8 8 0 0 1-8 7H76a8 8 0 0 1-8-7z"/>
+            <path class="art-line" d="M56 34h88M62 34l6 50a8 8 0 0 0 8 7h48a8 8 0 0 0 8-7l6-50M144 44h10a10 10 0 0 1 0 20h-12"/>
+          </g>
+          <path class="art-plate" d="M30 104h140"/>
+          <path class="art-arrow" d="M100 2v18m-8-8 8 8 8-8"/>
+        </svg>
+      </div>
+      <h1 id="vesselMsg" class="instruction" tabindex="-1"></h1>
+      <p id="vesselHint" class="hint"></p>
+      <div class="reading">
+        <span id="vesselWeight" class="reading-value">0</span><span class="reading-unit">g on the plate</span>
+        <span id="vesselWait" class="reading-wait">waiting…</span>
+      </div>
+      <button id="vesselSim" class="btn dashed" type="button" hidden>Place kettle (virtual)</button>
+      <button id="vesselNext" class="btn primary" type="button">It is on the plate</button>
+      <button class="btn ghost" type="button" data-action="cancel">Cancel</button>
+    </section>
+
+    <!-- ============ Ingredient ============ -->
+    <section class="view" data-view="ingredient" hidden>
+      <h1 id="ingMsg" class="instruction" tabindex="-1"></h1>
+      <div class="big"><span id="ingGrams" class="big-value">0</span><span class="big-unit">g</span></div>
+      <p id="ingHint" class="hint"></p>
+      <p class="waterline">Water for this: <b id="ingWater">–</b></p>
+      <div id="ingSim" class="row" hidden>
+        <button class="btn dashed grow" type="button" data-sim-add="250">+250 g (virtual)</button>
+        <button class="btn dashed grow" type="button" data-sim-add="50">+50 g</button>
+      </div>
+      <button id="ingDone" class="btn primary" type="button">Done, add water</button>
+      <button class="btn ghost" type="button" data-action="cancel">Cancel</button>
+    </section>
+
+    <!-- ============ Ready ============ -->
+    <section class="view" data-view="ready" hidden>
+      <h1 id="readyMsg" class="instruction" tabindex="-1"></h1>
+      <div class="ring" aria-hidden="true">
+        <svg viewBox="0 0 120 120">
+          <circle class="ring-track" cx="60" cy="60" r="52"/>
+          <circle id="readyArc" class="ring-fill" cx="60" cy="60" r="52"/>
+        </svg>
+        <div class="ring-center"><span id="readyCount" class="ring-count">3</span></div>
+      </div>
+      <p id="readyHint" class="hint"></p>
+      <button class="btn outline-danger" type="button" data-action="cancel">Cancel</button>
+      <button id="readyNow" class="btn ghost" type="button">Start now</button>
+    </section>
+
+    <!-- ============ Dispensing ============ -->
+    <section class="view" data-view="dispensing" hidden>
+      <h1 id="dispMsg" class="instruction" tabindex="-1"></h1>
+      <div id="dispRing" class="ring" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Water added">
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="ring-track" cx="60" cy="60" r="52"/>
+          <circle id="dispArc" class="ring-fill" cx="60" cy="60" r="52"/>
+        </svg>
+        <div class="ring-center">
+          <span id="dispValue" class="ring-value">0</span>
+          <span id="dispOf" class="ring-sub">of 0 ml</span>
+        </div>
+      </div>
+      <p id="dispHint" class="hint"></p>
+      <button id="stopBtn" class="btn stop" type="button">STOP</button>
+    </section>
+
+    <!-- ============ Done ============ -->
+    <section class="view" data-view="done" hidden>
+      <div class="badge-art good" aria-hidden="true">
+        <svg viewBox="0 0 48 48"><path d="M13 25l8 8 15-17"/></svg>
+      </div>
+      <h1 id="doneMsg" class="instruction" tabindex="-1"></h1>
+      <div class="card saved">
+        <p class="saved-head"><b id="doneSavedMl">0 ml</b> less than usual</p>
+        <div class="saved-grid">
+          <div><b id="doneWh">0</b><span>Wh saved</span></div>
+          <div><b id="doneEur">0</b><span>saved</span></div>
+          <div id="doneTimeBox"><b id="doneTime">0</b><span>less boiling</span></div>
+        </div>
+        <p id="doneBaseline" class="note"></p>
+      </div>
+      <p id="doneTip" class="card tip"></p>
+      <p id="doneToday" class="today"></p>
+      <button id="doneNew" class="btn primary" type="button">New</button>
+    </section>
+
+    <!-- ============ Error ============ -->
+    <section class="view" data-view="error" hidden>
+      <div class="badge-art bad" aria-hidden="true">
+        <svg viewBox="0 0 48 48"><path d="M24 13v14M24 34v1"/></svg>
+      </div>
+      <h1 id="errMsg" class="instruction" tabindex="-1"></h1>
+      <p id="errHint" class="hint"></p>
+      <button id="errRetry" class="btn primary" type="button">Try again</button>
+    </section>
+
+    <!-- ============ Demo panel (virtual scale only) ============ -->
+    <details id="demo" class="demo" hidden>
+      <summary>Demo panel <span class="badge">virtual scale</span></summary>
+      <div class="demo-body">
+        <p class="demo-weight">On the plate: <b id="demoWeight">0 g</b> <span id="demoStable" class="muted"></span></p>
+        <div class="grid2">
+          <button id="demoPlace" class="btn small" type="button">Place kettle</button>
+          <button id="demoRemove" class="btn small" type="button">Remove vessel</button>
+          <button class="btn small" type="button" data-sim-add="50">+50 g</button>
+          <button class="btn small" type="button" data-sim-add="250">+250 g</button>
+        </div>
+        <form id="demoSetForm" class="row">
+          <label class="sr-only" for="demoSet">Set weight in grams</label>
+          <input id="demoSet" type="number" inputmode="numeric" min="0" max="20000" step="10" placeholder="Set weight (g)">
+          <button class="btn small" type="submit">Set</button>
+        </form>
+        <p class="note">Turn the Knob to add potatoes: each click is 50 g. Press it for next / done.</p>
+
+        <div id="vboard" class="vboard" hidden>
+          <p class="vboard-title">Virtual board <span class="muted">(dev mode)</span></p>
+          <dl>
+            <div><dt>LED matrix</dt><dd id="vbScreen">idle</dd></div>
+            <div><dt>RGB LED</dt><dd><span id="vbLed" class="led" data-rgb="off"></span><span id="vbRgb">off</span></dd></div>
+            <div><dt>Valve</dt><dd id="vbValve">closed</dd></div>
+            <div><dt>Buzzer</dt><dd id="vbBeep">quiet</dd></div>
+          </dl>
+          <div class="row">
+            <button id="vbKnobMinus" class="btn small grow" type="button">Knob −</button>
+            <button id="vbKnobPress" class="btn small grow" type="button">Press</button>
+            <button id="vbKnobPlus" class="btn small grow" type="button">Knob +</button>
+          </div>
+        </div>
+      </div>
+    </details>
+  </main>
+
+  <!-- ============ Settings ============ -->
+  <dialog id="settingsSheet" class="sheet" aria-labelledby="settingsTitle">
+    <div class="sheet-head">
+      <h2 id="settingsTitle">Settings</h2>
+      <button class="icon-btn" type="button" data-close aria-label="Close settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <section>
+        <h3>On-device AI</h3>
+        <label class="switch-row">
+          <span>Understand free text with the local LLM<small id="llmInfo"></small></span>
+          <input id="setLlm" type="checkbox" role="switch">
+        </label>
+        <label class="switch-row">
+          <span>Read instructions aloud<small>On this phone only</small></span>
+          <input id="setSpeak" type="checkbox" role="switch">
+        </label>
+      </section>
+
+      <section>
+        <h3>Energy</h3>
+        <label class="field"><span>Tap water temperature</span><input id="set_t_start_c" type="number" inputmode="decimal" min="0" max="60" step="1"><em>°C</em></label>
+        <label class="field"><span>Kettle efficiency</span><input id="set_eff_kettle" type="number" inputmode="decimal" min="0.3" max="1" step="0.01"><em>0–1</em></label>
+        <label class="field"><span>Stove efficiency</span><input id="set_eff_stove" type="number" inputmode="decimal" min="0.2" max="1" step="0.01"><em>0–1</em></label>
+        <label class="field"><span>Electricity price</span><input id="set_price_eur_per_kwh" type="number" inputmode="decimal" min="0" max="2" step="0.01"><em>€/kWh</em></label>
+        <label class="field"><span>Kettle power</span><input id="set_kettle_kw" type="number" inputmode="decimal" min="0.5" max="3.5" step="0.1"><em>kW</em></label>
+        <label class="field"><span>Kettle minimum fill</span><input id="set_kettle_min_ml" type="number" inputmode="numeric" min="0" max="1500" step="10"><em>ml</em></label>
+      </section>
+
+      <section>
+        <h3>Usual habit</h3>
+        <p class="note">What people normally heat for the same dish. Savings are measured against this.</p>
+        <div id="baselineFields"></div>
+      </section>
+
+      <section id="virtualSection" hidden>
+        <h3>Virtual valve</h3>
+        <label class="field"><span>Flow</span><input id="set_flow_gps" type="number" inputmode="decimal" min="0" max="200" step="1"><em>g/s</em></label>
+        <p class="note">Set it to 0 to rehearse the “no water” safety stop.</p>
+      </section>
+
+      <section id="calSection" hidden>
+        <h3>Scale calibration</h3>
+        <p class="note">1. Empty the plate and tap Zero. 2. Put a known weight on it, enter its grams and tap Calibrate.</p>
+        <div class="row">
+          <button id="calZero" class="btn small" type="button">Zero</button>
+          <label class="sr-only" for="calGrams">Known weight in grams</label>
+          <input id="calGrams" type="number" inputmode="decimal" min="1" max="5000" step="1" placeholder="Known weight (g)">
+          <button id="calGo" class="btn small" type="button">Calibrate</button>
+        </div>
+        <p id="calResult" class="note" role="status"></p>
+      </section>
+
+      <div class="row">
+        <button id="settingsSave" class="btn primary grow" type="button">Save</button>
+        <button id="settingsReset" class="btn ghost" type="button">Reset</button>
+      </div>
+      <p id="aboutLine" class="note about"></p>
+    </div>
+  </dialog>
+
+  <!-- ============ History ============ -->
+  <dialog id="historySheet" class="sheet" aria-labelledby="historyTitle">
+    <div class="sheet-head">
+      <h2 id="historyTitle">Savings</h2>
+      <button class="icon-btn" type="button" data-close aria-label="Close savings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <div class="totals">
+        <div class="card total"><span>Today</span><b id="histTodayWh">0 Wh</b><small id="histTodayMore"></small></div>
+        <div class="card total"><span>All time</span><b id="histTotalWh">0 Wh</b><small id="histTotalMore"></small></div>
+      </div>
+      <h3>Last runs</h3>
+      <ul id="histList" class="runs"></ul>
+      <p class="note">Savings compare the water you heated with the usual habit for the same dish. Change the habits and energy constants in Settings.</p>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
